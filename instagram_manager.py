@@ -132,6 +132,8 @@ def add_account():
     elif choice == '2':
         user = input("Nom d'utilisateur : ").strip()
         cookie = input("Cookie Instagram : ").strip()
+        # Nettoyer le cookie avant de l'enregistrer
+        cookie = ';'.join([c.strip() for c in cookie.split(';') if c.strip()])
         accounts = load_accounts()
         if user in accounts:
             print("Ce compte existe déjà.")
@@ -343,8 +345,10 @@ def _get_latest_post_id(session, username, cookie):
 
 def _perform_action(session, url, cookie, data=None):
     """Exécute une action (POST) sur l'API Instagram."""
+    # Nettoyer le cookie pour enlever les espaces superflus
+    cookie = ';'.join([c.strip() for c in cookie.split(';') if c.strip()])
     try:
-        csrftoken = [item.split('=')[1] for item in cookie.split(';') if 'csrftoken' in item][0]
+        csrftoken = [item.split('=')[1].strip() for item in cookie.split(';') if 'csrftoken' in item][0]
     except IndexError:
         print(f"{B}[{R}✖{B}] Jeton CSRF introuvable dans le cookie.{S}")
         return None
