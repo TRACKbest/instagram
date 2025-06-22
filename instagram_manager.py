@@ -4,6 +4,9 @@ import json
 from uuid import uuid4
 import requests
 import sys
+import random
+import re
+from bs4 import BeautifulSoup as bs
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -273,30 +276,209 @@ def reactivate_account():
         print(f"{B}[{R}✖{B}] Entrée invalide.{S}")
         time.sleep(1)
 
+def user_agent():
+    """Génère un user-agent Android aléatoire pour les requêtes."""
+    version = f"{random.randint(100, 200)}.0.0.{random.randint(10, 30)}.{random.randint(100, 200)}"
+    android_version = f"{random.randint(7, 12)}"
+    dpi = random.choice(['320', '480', '640'])
+    width = random.choice(['1080', '1440'])
+    height = random.choice(['1920', '2560'])
+    manufacturer = random.choice(['samsung', 'huawei', 'google', 'oneplus', 'xiaomi'])
+    model = random.choice(['SM-G991U', 'Pixel 6', 'Mate 40 Pro', 'OnePlus 9', 'Mi 11'])
+    return f"Instagram {version} Android ({android_version}; {dpi}dpi; {width}x{height}; {manufacturer}; {model}; en_US)"
+
+def _get_entity_id(session, url, cookie, entity_type):
+    """Récupère un ID (user_id ou media_id) depuis une URL Instagram."""
+    headers = {'user-agent': user_agent()}
+    # Utiliser le cookie pour la session, si disponible
+    cookies_dict = {}
+    if cookie:
+        # Simple parsing du cookie
+        for item in cookie.split(';'):
+            if '=' in item:
+                key, value = item.split('=', 1)
+                cookies_dict[key.strip()] = value.strip()
+    try:
+        response = session.get(url, headers=headers, cookies=cookies_dict, timeout=10)
+        response.raise_for_status()
+        
+        pattern = f'"{entity_type}":"(.*?)"'
+        match = re.search(pattern, response.text)
+        
+        if match:
+            return match.group(1)
+        print(f"{B}[{R}✖{B}] Impossible de trouver l'ID ({entity_type}) pour {url}{S}")
+        return None
+    except requests.RequestException as e:
+        print(f"{B}[{R}✖{B}] Erreur réseau en récupérant l'ID de {url}: {e}{S}")
+        return None
+
+def _get_user_id(session, username, cookie):
+    url = f"https://www.instagram.com/{username}/"
+    return _get_entity_id(session, url, cookie, "user_id")
+
+def _get_latest_post_id(session, username, cookie):
+    """Récupère l'ID du post le plus récent d'un utilisateur."""
+    profile_url = f"https://www.instagram.com/{username}/"
+    headers = {'user-agent': user_agent()}
+    cookies_dict = {}
+    if cookie:
+        for item in cookie.split(';'):
+            if '=' in item:
+                key, value = item.split('=', 1)
+                cookies_dict[key.strip()] = value.strip()
+    try:
+        res = session.get(profile_url, headers=headers, cookies=cookies_dict, timeout=10)
+        res.raise_for_status()
+        
+        # Regex pour trouver le code court du premier lien de post
+        match = re.search(r'"shortcode":"([^"]+)"', res.text)
+        if match:
+            post_url = f"https://www.instagram.com/p/{match.group(1)}/"
+            return _get_entity_id(session, post_url, cookie, "media_id")
+        return None
+    except Exception as e:
+        print(f"{B}[{R}✖{B}] Erreur en récupérant le dernier post de {username}: {e}{S}")
+        return None
+
+def _perform_action(session, url, cookie, data=None):
+    """Exécute une action (POST) sur l'API Instagram."""
+    try:
+        csrftoken = [item.split('=')[1] for item in cookie.split(';') if 'csrftoken' in item][0]
+    except IndexError:
+        print(f"{B}[{R}✖{B}] Jeton CSRF introuvable dans le cookie.{S}")
+        return None
+
+    headers = {
+        "x-ig-app-id": "936619743392459", # ID d'app web
+        "x-instagram-ajax": "1008229312", # Varie mais peut être statique
+        "x-csrftoken": csrftoken,
+        "user-agent": user_agent(),
+        "cookie": cookie
+    }
+    if data:
+        headers["content-type"] = "application/x-www-form-urlencoded"
+
+    try:
+        response = session.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"{B}[{R}✖{B}] Erreur de requête vers {url}: {e}{S}")
+        return None
+
+def follow_user(session, target_username, cookie):
+    user_id = _get_user_id(session, target_username, cookie)
+    if not user_id: return False
+    
+    url = f"https://www.instagram.com/api/v1/friendships/create/{user_id}/"
+    response = _perform_action(session, url, cookie)
+    return response and response.get("status") == "ok"
+
+def like_post(session, post_id, cookie):
+    if not post_id: return False
+    
+    url = f"https://www.instagram.com/api/v1/media/{post_id}/like/"
+    response = _perform_action(session, url, cookie)
+    return response and response.get("status") == "ok"
+
+def comment_on_post(session, post_id, cookie, text):
+    if not post_id: return False
+    
+    url = f"https://www.instagram.com/api/v1/web/comments/{post_id}/add/"
+    data = {'comment_text': text}
+    response = _perform_action(session, url, cookie, data=data)
+    return response and response.get("status") == "ok"
+
 def start_bot():
     clear()
-    print("--- Démarrage du bot (simulation) ---")
+    print("--- Démarrage du bot ---")
+    
     accounts = load_accounts()
-    if not accounts:
-        print("Aucun compte disponible.")
-        time.sleep(2)
+    on_hold_users = load_on_hold_accounts()
+    active_accounts = {u: d for u, d in accounts.items() if u not in on_hold_users}
+
+    if len(active_accounts) < 2:
+        print(f"{B}[{R}✖{B}] Vous avez besoin d'au moins 2 comptes actifs pour démarrer.{S}")
+        time.sleep(3)
         return
-    if os.path.exists(HASHTAGS_FILE):
-        with open(HASHTAGS_FILE, 'r') as f:
-            hashtags = [h.strip() for h in f.read().split() if h.strip()]
-    else:
-        hashtags = []
+
+    hashtags = [h for f in [HASHTAGS_FILE] if os.path.exists(f) for l in open(f) for h in l.split() if h.strip()]
     if not hashtags:
-        print("Aucun hashtag défini. Veuillez en ajouter avant de démarrer le bot.")
-        time.sleep(2)
+        print(f"{B}[{R}✖{B}] Aucun hashtag défini. Ajoutez-en via le menu.{S}")
+        time.sleep(3)
         return
-    print(f"{len(accounts)} comptes, {len(hashtags)} hashtags.")
-    print("\n[Simulation] Le bot va :")
-    print(f"- Liker, suivre, commenter entre les comptes (max {FOLLOW_LIMIT_PER_HOUR} follow/heure, {LIKE_LIMIT_PER_HOUR} like/heure, {COMMENT_LIMIT_PER_HOUR} comment/heure par compte)")
-    print("- Utiliser les hashtags : " + ', '.join(hashtags))
-    print("- Mettre en pause les comptes qui atteignent une limite horaire")
-    print("\nAppuyez sur Entrée pour revenir au menu...")
-    input()
+        
+    print(f"{B}[{V}✔{B}] Bot démarré avec {len(active_accounts)} comptes. Appuyez sur CTRL+C pour arrêter.{S}")
+    time.sleep(2)
+    
+    try:
+        while True:
+            all_accounts = load_accounts()
+            on_hold_users = load_on_hold_accounts()
+            active_users = [u for u in all_accounts if u not in on_hold_users]
+            
+            if len(active_users) < 2:
+                print("Pas assez de comptes actifs. Le bot se met en pause (60s).")
+                time.sleep(60)
+                continue
+
+            random.shuffle(active_users)
+
+            for username in active_users:
+                account_data = all_accounts[username]
+                cookie = account_data.get('cookie')
+                if not cookie: continue
+                
+                current_hour = time.localtime().tm_hour
+                if account_data.get('last_action_hour') != current_hour:
+                    account_data.update({'follow_count': 0, 'like_count': 0, 'comment_count': 0, 'last_action_hour': current_hour})
+
+                target_user = random.choice([u for u in active_users if u != username])
+                session = requests.session()
+                
+                if account_data['follow_count'] < FOLLOW_LIMIT_PER_HOUR:
+                    print(f"[{username}] -> Tente de suivre [{target_user}]...")
+                    if follow_user(session, target_user, cookie):
+                        print(f"{B}[{V}✔{B}] Follow réussi: {username} -> {target_user}{S}")
+                        account_data['follow_count'] += 1
+                    else:
+                        print(f"{B}[{R}✖{B}] Échec du follow: {username} -> {target_user}{S}")
+                    time.sleep(random.randint(5, 10))
+                
+                post_id = _get_latest_post_id(session, target_user, cookie)
+                if post_id:
+                    if account_data['like_count'] < LIKE_LIMIT_PER_HOUR:
+                        print(f"[{username}] -> Tente de liker un post de [{target_user}]...")
+                        if like_post(session, post_id, cookie):
+                             print(f"{B}[{V}✔{B}] Like réussi: {username} -> post de {target_user}{S}")
+                             account_data['like_count'] += 1
+                        else:
+                            print(f"{B}[{R}✖{B}] Échec du like: {username} -> post de {target_user}{S}")
+                        time.sleep(random.randint(5, 10))
+                        
+                    if account_data['comment_count'] < COMMENT_LIMIT_PER_HOUR:
+                        comment_text = random.choice(hashtags)
+                        print(f"[{username}] -> Tente de commenter '{comment_text}'...")
+                        if comment_on_post(session, post_id, cookie, comment_text):
+                            print(f"{B}[{V}✔{B}] Commentaire réussi: {username} -> post de {target_user}{S}")
+                            account_data['comment_count'] += 1
+                        else:
+                             print(f"{B}[{R}✖{B}] Échec du commentaire: {username} -> post de {target_user}{S}")
+                        time.sleep(random.randint(10, 15))
+                
+                if all(account_data[k] >= l for k, l in [('follow_count', FOLLOW_LIMIT_PER_HOUR), ('like_count', LIKE_LIMIT_PER_HOUR), ('comment_count', COMMENT_LIMIT_PER_HOUR)]):
+                    print(f"[{R}✖{B}] Limites horaires atteintes pour {username}. Mise en attente.{S}")
+                    on_hold_users.append(username)
+                    save_on_hold_accounts(list(set(on_hold_users)))
+
+                save_accounts(all_accounts)
+                print("--- Pause avant le prochain compte (30-60s) ---")
+                time.sleep(random.randint(30, 60))
+
+    except KeyboardInterrupt:
+        print("\nArrêt du bot demandé par l'utilisateur.")
+        return
 
 def update_bot():
     clear()
