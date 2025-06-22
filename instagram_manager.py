@@ -3,6 +3,7 @@ import time
 import json
 from uuid import uuid4
 import requests
+import sys
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -16,6 +17,12 @@ FOLLOW_LIMIT_PER_HOUR = 10
 LIKE_LIMIT_PER_HOUR = 10
 COMMENT_LIMIT_PER_HOUR = 10
 MAX_HASHTAGS = 30
+
+# Couleurs
+V = '\033[1;92m'  # Vert
+B = '\033[1;97m'  # Blanc
+R = '\033[1;91m'  # Rouge
+S = '\033[0m'     # Reset
 
 # Initialisation des fichiers
 os.makedirs(BASE_DIR, exist_ok=True)
@@ -114,10 +121,10 @@ def add_account():
                 'last_action_hour': 0
             }
             save_accounts(accounts)
-            print("Compte ajouté et cookie récupéré.")
-            time.sleep(1)
+            print(f"{B}[{V}✔{B}] Compte ajouté et cookie récupéré.{S}")
+            time.sleep(2)
         else:
-            print("Échec de la connexion. Identifiants invalides ou compte bloqué.")
+            print(f"{B}[{R}✖{B}] Échec de la connexion. Identifiants invalides ou compte bloqué.{S}")
             time.sleep(2)
     elif choice == '2':
         user = input("Nom d'utilisateur : ").strip()
@@ -135,7 +142,7 @@ def add_account():
             'last_action_hour': 0
         }
         save_accounts(accounts)
-        print("Compte ajouté.")
+        print(f"{B}[{V}✔{B}] Compte ajouté.{S}")
         time.sleep(1)
     elif choice == '0':
         return
@@ -173,13 +180,13 @@ def delete_account():
         if 1 <= choice <= len(users):
             del accounts[users[choice-1]]
             save_accounts(accounts)
-            print("Compte supprimé.")
+            print(f"{B}[{V}✔{B}] Compte supprimé.{S}")
             time.sleep(1)
         else:
-            print("Choix invalide.")
+            print(f"{B}[{R}✖{B}] Choix invalide.{S}")
             time.sleep(1)
     except ValueError:
-        print("Entrée invalide.")
+        print(f"{B}[{R}✖{B}] Entrée invalide.{S}")
         time.sleep(1)
 
 def manage_hashtags():
@@ -201,7 +208,7 @@ def manage_hashtags():
             return
         with open(HASHTAGS_FILE, 'w') as f:
             f.write(' '.join(new_tags))
-        print("Hashtags mis à jour.")
+        print(f"{B}[{V}✔{B}] Hashtags mis à jour.{S}")
         time.sleep(1)
     elif choice == '0':
         return
@@ -257,13 +264,13 @@ def reactivate_account():
                 accounts[user]['comment_count'] = 0
                 accounts[user]['last_action_hour'] = 0
                 save_accounts(accounts)
-            print(f"Compte '{user}' réactivé.")
+            print(f"{B}[{V}✔{B}] Compte '{user}' réactivé.{S}")
             time.sleep(1)
         else:
-            print("Choix invalide.")
+            print(f"{B}[{R}✖{B}] Choix invalide.{S}")
             time.sleep(1)
     except ValueError:
-        print("Entrée invalide.")
+        print(f"{B}[{R}✖{B}] Entrée invalide.{S}")
         time.sleep(1)
 
 def start_bot():
@@ -291,6 +298,30 @@ def start_bot():
     print("\nAppuyez sur Entrée pour revenir au menu...")
     input()
 
+def update_bot():
+    clear()
+    print("--- Mise à jour du Bot ---")
+    url = "https://raw.githubusercontent.com/TRACKbest/instagram/main/instagram_manager.py"
+    try:
+        print("Téléchargement de la dernière version...")
+        response = requests.get(url)
+        response.raise_for_status()  # Lève une exception si le téléchargement échoue
+        
+        with open(__file__, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+            
+        print(f"{B}[{V}✔{B}] Mise à jour réussie ! Le script va redémarrer.{S}")
+        time.sleep(2)
+        # Redémarre le script
+        os.execv(sys.executable, ['python'] + sys.argv)
+    except requests.exceptions.RequestException as e:
+        print(f"{B}[{R}✖{B}] Erreur lors du téléchargement de la mise à jour: {e}{S}")
+        print("Veuillez réessayer plus tard ou mettre à jour manuellement.")
+        time.sleep(3)
+    except Exception as e:
+        print(f"{B}[{R}✖{B}] Une erreur est survenue lors de la mise à jour: {e}{S}")
+        time.sleep(3)
+
 def menu():
     import_smm_py_accounts()
     while True:
@@ -306,6 +337,7 @@ def menu():
 [5] Lister les comptes en attente
 [6] Réactiver un compte en attente
 [7] Démarrer le bot
+[8] Mettre à jour le bot
 [0] Quitter
 """)
         choice = input("Votre choix : ")
@@ -323,11 +355,13 @@ def menu():
             reactivate_account()
         elif choice == '7':
             start_bot()
+        elif choice == '8':
+            update_bot()
         elif choice == '0':
             print("Au revoir !")
             break
         else:
-            print("Choix invalide.")
+            print(f"{B}[{R}✖{B}] Choix invalide.{S}")
             time.sleep(1)
 
 if __name__ == "__main__":
