@@ -7,6 +7,8 @@ import sys
 import random
 import re
 from bs4 import BeautifulSoup as bs
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -14,6 +16,9 @@ ACCOUNTS_FILE = os.path.join(BASE_DIR, "insta-accounts.json")
 HASHTAGS_FILE = os.path.join(BASE_DIR, "hashtags.txt")
 ON_HOLD_FILE = os.path.join(BASE_DIR, "on_hold_accounts.txt")
 SMMPY_ACCOUNTS = os.path.join(BASE_DIR, "insta-acct.txt")
+SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+CREATED_ACCOUNTS_FILE = os.path.join(BASE_DIR, "created_accounts.txt")
+CREATORS_FILE = os.path.join(BASE_DIR, "creators.txt")
 
 # Limites Instagram
 FOLLOW_LIMIT_PER_HOUR = 10
@@ -29,6 +34,7 @@ S = '\033[0m'     # Reset
 
 # Initialisation des fichiers
 os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 if not os.path.exists(ACCOUNTS_FILE):
     with open(ACCOUNTS_FILE, 'w') as f:
         json.dump({}, f)
@@ -524,6 +530,128 @@ def update_bot():
         print(f"{B}[{R}✖{B}] Une erreur est survenue lors de la mise à jour: {e}{S}")
         time.sleep(3)
 
+def add_created_account(username, password):
+    with open(CREATED_ACCOUNTS_FILE, "a") as f:
+        f.write(f"{username}:{password}\n")
+
+def add_creator(email_or_phone):
+    creators = load_creators()
+    if email_or_phone not in creators:
+        creators[email_or_phone] = 0
+        save_creators(creators)
+
+def load_creators():
+    creators = {}
+    if os.path.exists(CREATORS_FILE):
+        with open(CREATORS_FILE, "r") as f:
+            for line in f:
+                if ":" in line:
+                    k, v = line.strip().split(":", 1)
+                    creators[k] = int(v)
+    return creators
+
+def save_creators(creators):
+    with open(CREATORS_FILE, "w") as f:
+        for k, v in creators.items():
+            f.write(f"{k}:{v}\n")
+
+def show_created_accounts():
+    clear()
+    if os.path.exists(CREATED_ACCOUNTS_FILE):
+        with open(CREATED_ACCOUNTS_FILE, "r") as f:
+            lines = f.readlines()
+        print("Comptes créés :")
+        for line in lines:
+            print(line.strip())
+    else:
+        print("Aucun compte créé.")
+    input("\nAppuie sur Entrée pour revenir au menu...")
+
+def show_creators():
+    clear()
+    creators = load_creators()
+    print("Numéros/emails utilisés :")
+    for k, v in creators.items():
+        print(f"{k} : {v}/5 comptes")
+    input("\nAppuie sur Entrée pour revenir au menu...")
+
+def auto_create_accounts():
+    clear()
+    print("Création automatique de comptes Instagram (validation manuelle du code email/SMS)")
+    creators = load_creators()
+    while True:
+        # Choisir un email/numéro qui n'a pas atteint la limite
+        available = [k for k, v in creators.items() if v < 5]
+        if not available:
+            email_or_phone = input("Aucun numéro/email disponible. Entrez un nouveau numéro/email : ").strip()
+            creators[email_or_phone] = 0
+        else:
+            print("Numéros/emails disponibles :")
+            for i, k in enumerate(available, 1):
+                print(f"[{i}] {k} ({creators[k]}/5 comptes)")
+            print("[0] Ajouter un nouveau numéro/email")
+            choice = input("Votre choix : ")
+            if choice == "0":
+                email_or_phone = input("Entrez un nouveau numéro/email : ").strip()
+                creators[email_or_phone] = 0
+            else:
+                try:
+                    idx = int(choice) - 1
+                    email_or_phone = available[idx]
+                except:
+                    print("Choix invalide.")
+                    continue
+
+        password = input("Mot de passe à utiliser pour ce compte : ").strip()
+        nb = int(input(f"Combien de comptes veux-tu créer avec {email_or_phone} (max {5 - creators[email_or_phone]}) ? "))
+        nb = min(nb, 5 - creators[email_or_phone])
+
+        first_names = ["John", "James", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
+        last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis", "Garcia", "Rodriguez", "Wilson"]
+
+        for i in range(nb):
+            full_name = f"{random.choice(first_names)} {random.choice(last_names)}"
+            username = f"{random.choice(first_names).lower()}{random.choice(last_names).lower()}{random.randint(1000,9999)}"
+
+            driver = webdriver.Chrome()
+            driver.get("https://www.instagram.com/accounts/emailsignup/")
+            time.sleep(3)
+
+            driver.find_element(By.NAME, "emailOrPhone").send_keys(email_or_phone)
+            driver.find_element(By.NAME, "fullName").send_keys(full_name)
+            driver.find_element(By.NAME, "username").send_keys(username)
+            driver.find_element(By.NAME, "password").send_keys(password)
+            time.sleep(1)
+            driver.find_element(By.XPATH, "//button[@type='submit']").click()
+            time.sleep(5)
+
+            print(f"Valide le code reçu pour {username} dans le navigateur, puis appuie sur Entrée ici.")
+            input("Appuie sur Entrée quand le compte est validé...")
+
+            # Récupérer les cookies de Selenium
+            selenium_cookies = driver.get_cookies()
+            cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in selenium_cookies])
+
+            # Sauvegarder le cookie dans le fichier session
+            session_file = os.path.join(SESSIONS_DIR, f"{username}.session")
+            with open(session_file, "w") as f:
+                f.write(cookie_str)
+
+            # Ajoute le compte dans les fichiers
+            add_created_account(username, password)
+
+            creators[email_or_phone] += 1
+            save_creators(creators)
+            print(f"Compte ajouté : {username} ({email_or_phone})")
+
+            driver.quit()
+            time.sleep(5)
+
+        # Proposer de continuer ou quitter
+        again = input("Créer d'autres comptes ? (o/n) : ").strip().lower()
+        if again != "o":
+            break
+
 def menu():
     import_smm_py_accounts()
     while True:
@@ -540,6 +668,9 @@ def menu():
 [6] Réactiver un compte en attente
 [7] Démarrer le bot
 [8] Mettre à jour le bot
+[9] Créer des comptes Instagram automatiquement
+[10] Voir la liste des comptes créés
+[11] Voir les numéros/emails utilisés
 [0] Quitter
 """)
         choice = input("Votre choix : ")
@@ -559,6 +690,12 @@ def menu():
             start_bot()
         elif choice == '8':
             update_bot()
+        elif choice == '9':
+            auto_create_accounts()
+        elif choice == '10':
+            show_created_accounts()
+        elif choice == '11':
+            show_creators()
         elif choice == '0':
             print("Au revoir !")
             break
