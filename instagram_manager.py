@@ -17,7 +17,7 @@ SMMPY_ACCOUNTS = os.path.join(BASE_DIR, "insta-acct.txt")
 
 # Limites Instagram
 FOLLOW_LIMIT_PER_HOUR = 10
-LIKE_LIMIT_PER_HOUR = 10
+LIKE_LIMIT_PER_HOUR = 50
 COMMENT_LIMIT_PER_HOUR = 10
 MAX_HASHTAGS = 30
 
@@ -423,9 +423,13 @@ def start_bot():
             active_users = [u for u in all_accounts if u not in on_hold_users]
             
             if len(active_users) < 2:
-                print("Pas assez de comptes actifs. Le bot se met en pause (60s).")
-                time.sleep(60)
-                continue
+                print("Pas assez de comptes actifs. Le bot s'arrête.")
+                break
+
+            # Si tous les comptes sont en attente, on arrête le bot
+            if len(active_users) == 0:
+                print("Tous les comptes ont atteint leurs limites. Le bot s'arrête.")
+                break
 
             random.shuffle(active_users)
 
@@ -440,7 +444,8 @@ def start_bot():
 
                 target_user = random.choice([u for u in active_users if u != username])
                 session = requests.session()
-                
+
+                # Suivi
                 if account_data['follow_count'] < FOLLOW_LIMIT_PER_HOUR:
                     print(f"[{username}] -> Tente de suivre [{target_user}]...")
                     if follow_user(session, target_user, cookie):
@@ -448,19 +453,25 @@ def start_bot():
                         account_data['follow_count'] += 1
                     else:
                         print(f"{B}[{R}✖{B}] Échec du follow: {username} -> {target_user}{S}")
-                    time.sleep(random.randint(5, 10))
-                
+                    time.sleep(random.randint(20, 40))
+                else:
+                    print(f"[{username}] a atteint la limite de follow/h.")
+
+                # Like
                 post_id = _get_latest_post_id(session, target_user, cookie)
                 if post_id:
                     if account_data['like_count'] < LIKE_LIMIT_PER_HOUR:
                         print(f"[{username}] -> Tente de liker un post de [{target_user}]...")
                         if like_post(session, post_id, cookie):
-                             print(f"{B}[{V}✔{B}] Like réussi: {username} -> post de {target_user}{S}")
-                             account_data['like_count'] += 1
+                            print(f"{B}[{V}✔{B}] Like réussi: {username} -> post de {target_user}{S}")
+                            account_data['like_count'] += 1
                         else:
                             print(f"{B}[{R}✖{B}] Échec du like: {username} -> post de {target_user}{S}")
-                        time.sleep(random.randint(5, 10))
-                        
+                        time.sleep(random.randint(20, 40))
+                    else:
+                        print(f"[{username}] a atteint la limite de like/h.")
+
+                    # Commentaire
                     if account_data['comment_count'] < COMMENT_LIMIT_PER_HOUR:
                         comment_text = random.choice(hashtags)
                         print(f"[{username}] -> Tente de commenter '{comment_text}'...")
@@ -468,17 +479,22 @@ def start_bot():
                             print(f"{B}[{V}✔{B}] Commentaire réussi: {username} -> post de {target_user}{S}")
                             account_data['comment_count'] += 1
                         else:
-                             print(f"{B}[{R}✖{B}] Échec du commentaire: {username} -> post de {target_user}{S}")
-                        time.sleep(random.randint(10, 15))
-                
-                if all(account_data[k] >= l for k, l in [('follow_count', FOLLOW_LIMIT_PER_HOUR), ('like_count', LIKE_LIMIT_PER_HOUR), ('comment_count', COMMENT_LIMIT_PER_HOUR)]):
+                            print(f"{B}[{R}✖{B}] Échec du commentaire: {username} -> post de {target_user}{S}")
+                        time.sleep(random.randint(20, 40))
+                    else:
+                        print(f"[{username}] a atteint la limite de commentaire/h.")
+
+                # Si le compte a atteint les 3 limites, on le met en attente
+                if (account_data['follow_count'] >= FOLLOW_LIMIT_PER_HOUR and
+                    account_data['like_count'] >= LIKE_LIMIT_PER_HOUR and
+                    account_data['comment_count'] >= COMMENT_LIMIT_PER_HOUR):
                     print(f"[{R}✖{B}] Limites horaires atteintes pour {username}. Mise en attente.{S}")
                     on_hold_users.append(username)
                     save_on_hold_accounts(list(set(on_hold_users)))
 
                 save_accounts(all_accounts)
-                print("--- Pause avant le prochain compte (30-60s) ---")
-                time.sleep(random.randint(30, 60))
+                print("--- Pause avant le prochain compte (60-120s) ---")
+                time.sleep(random.randint(60, 120))
 
     except KeyboardInterrupt:
         print("\nArrêt du bot demandé par l'utilisateur.")
