@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup as bs
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 import platform
+import importlib.util
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -20,6 +21,8 @@ SMMPY_ACCOUNTS = os.path.join(BASE_DIR, "insta-acct.txt")
 SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 CREATED_ACCOUNTS_FILE = os.path.join(BASE_DIR, "created_accounts.txt")
 CREATORS_FILE = os.path.join(BASE_DIR, "creators.txt")
+USER_AGENT_MODE_FILE = os.path.join(os.path.dirname(__file__), 'user_agent_mode.txt')
+USER_AGENT_MODES = ['custom', 'real']
 
 # Limites Instagram
 FOLLOW_LIMIT_PER_HOUR = 10
@@ -285,8 +288,28 @@ def reactivate_account():
         print(f"{B}[{R}✖{B}] Entrée invalide.{S}")
         time.sleep(1)
 
+def get_user_agent_mode():
+    if os.path.exists(USER_AGENT_MODE_FILE):
+        with open(USER_AGENT_MODE_FILE, 'r') as f:
+            mode = f.read().strip()
+            if mode in USER_AGENT_MODES:
+                return mode
+    return 'custom'
+
+def set_user_agent_mode(mode):
+    if mode in USER_AGENT_MODES:
+        with open(USER_AGENT_MODE_FILE, 'w') as f:
+            f.write(mode)
+
 def user_agent():
-    """Génère un user-agent Android aléatoire pour les requêtes."""
+    mode = get_user_agent_mode()
+    if mode == 'real':
+        # Charger la fonction get_random_user_agent depuis android/user_agents.py
+        spec = importlib.util.spec_from_file_location('user_agents', os.path.join(os.path.dirname(__file__), 'android', 'user_agents.py'))
+        user_agents = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(user_agents)
+        return user_agents.get_random_user_agent()
+    # Mode custom (par défaut)
     version = f"{random.randint(100, 200)}.0.0.{random.randint(10, 30)}.{random.randint(100, 200)}"
     android_version = f"{random.randint(7, 12)}"
     dpi = random.choice(['320', '480', '640'])
@@ -577,87 +600,99 @@ def show_creators():
     input("\nAppuie sur Entrée pour revenir au menu...")
 
 def auto_create_accounts():
-    # Vérification de l'environnement
+    import platform
     if platform.system().lower() == "linux" and "android" in platform.platform().lower():
         print("La création automatique de comptes Instagram n'est pas possible sur Termux/Android.")
         print("Crée les comptes manuellement, puis ajoute-les dans le bot via l'option 'Ajouter un compte'.")
         input("Appuie sur Entrée pour revenir au menu...")
         return
+    import random
+    import time
     clear()
     print("Création automatique de comptes Instagram (validation manuelle du code email/SMS)")
-    creators = load_creators()
-    while True:
-        # Choisir un email/numéro qui n'a pas atteint la limite
-        available = [k for k, v in creators.items() if v < 5]
-        if not available:
-            email_or_phone = input("Aucun numéro/email disponible. Entrez un nouveau numéro/email : ").strip()
-            creators[email_or_phone] = 0
+    email_or_phone = input("Email ou numéro à utiliser : ").strip()
+    password = input("Mot de passe à utiliser : ").strip()
+    nb = int(input("Combien de comptes veux-tu créer ? "))
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    CREATED_ACCOUNTS_FILE = os.path.join(BASE_DIR, "created_accounts.txt")
+    def generate_username():
+        first_names = ["john", "james", "robert", "michael", "william", "david", "richard", "joseph", "thomas", "charles"]
+        last_names = ["smith", "johnson", "williams", "brown", "jones", "miller", "davis", "garcia", "rodriguez", "wilson"]
+        sep = random.choice(['.', '_'])
+        username = f"{random.choice(first_names)}{sep}{random.choice(last_names)}{sep}{random.randint(100,9999)}"
+        return username
+    def generate_birthdate():
+        current_year = time.localtime().tm_year
+        age = random.randint(26, 79)
+        year = current_year - age
+        month = random.randint(1, 12)
+        if month == 2:
+            day = random.randint(1, 28)
+        elif month in [4, 6, 9, 11]:
+            day = random.randint(1, 30)
         else:
-            print("Numéros/emails disponibles :")
-            for i, k in enumerate(available, 1):
-                print(f"[{i}] {k} ({creators[k]}/5 comptes)")
-            print("[0] Ajouter un nouveau numéro/email")
-            choice = input("Votre choix : ")
-            if choice == "0":
-                email_or_phone = input("Entrez un nouveau numéro/email : ").strip()
-                creators[email_or_phone] = 0
-            else:
-                try:
-                    idx = int(choice) - 1
-                    email_or_phone = available[idx]
-                except:
-                    print("Choix invalide.")
-                    continue
-
-        password = input("Mot de passe à utiliser pour ce compte : ").strip()
-        nb = int(input(f"Combien de comptes veux-tu créer avec {email_or_phone} (max {5 - creators[email_or_phone]}) ? "))
-        nb = min(nb, 5 - creators[email_or_phone])
-
-        first_names = ["John", "James", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
-        last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis", "Garcia", "Rodriguez", "Wilson"]
-
-        for i in range(nb):
-            full_name = f"{random.choice(first_names)} {random.choice(last_names)}"
-            username = f"{random.choice(first_names).lower()}{random.choice(last_names).lower()}{random.randint(1000,9999)}"
-
-            driver = webdriver.Chrome()
-            driver.get("https://www.instagram.com/accounts/emailsignup/")
-            time.sleep(3)
-
-            driver.find_element(By.NAME, "emailOrPhone").send_keys(email_or_phone)
-            driver.find_element(By.NAME, "fullName").send_keys(full_name)
-            driver.find_element(By.NAME, "username").send_keys(username)
-            driver.find_element(By.NAME, "password").send_keys(password)
-            time.sleep(1)
-            driver.find_element(By.XPATH, "//button[@type='submit']").click()
+            day = random.randint(1, 31)
+        return (day, month, year)
+    def save_account(username, password, cookie_str):
+        with open(CREATED_ACCOUNTS_FILE, "a") as f:
+            f.write(f"{username}:{password}\n")
+        with open(os.path.join(SESSIONS_DIR, f"{username}.session"), "w") as f:
+            f.write(cookie_str)
+    for i in range(nb):
+        print(f"\n--- Création du compte {i+1} ---")
+        driver = webdriver.Chrome()
+        driver.get("https://www.instagram.com/accounts/emailsignup/")
+        time.sleep(3)
+        username = generate_username()
+        full_name = username.replace('.', ' ').replace('_', ' ').title()
+        day, month, year = generate_birthdate()
+        # Remplir le formulaire
+        driver.find_element(By.NAME, "emailOrPhone").send_keys(email_or_phone)
+        driver.find_element(By.NAME, "fullName").send_keys(full_name)
+        driver.find_element(By.NAME, "username").send_keys(username)
+        driver.find_element(By.NAME, "password").send_keys(password)
+        # Vérifier que tous les champs sont bien remplis
+        while True:
+            fields = [
+                driver.find_element(By.NAME, "emailOrPhone").get_attribute("value"),
+                driver.find_element(By.NAME, "fullName").get_attribute("value"),
+                driver.find_element(By.NAME, "username").get_attribute("value"),
+                driver.find_element(By.NAME, "password").get_attribute("value"),
+            ]
+            if all(fields):
+                break
+            print("Tous les champs ne sont pas remplis, vérifie le formulaire.")
+            time.sleep(2)
+        # Cliquer sur Suivant
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
+        time.sleep(5)
+        # Remplir la date de naissance
+        try:
+            # Instagram peut changer le selecteur, adapte si besoin
+            month_select = driver.find_element(By.XPATH, "//select[@title='Mois :']")
+            month_select.send_keys(str(month))
+            day_select = driver.find_element(By.XPATH, "//select[@title='Jour :']")
+            day_select.send_keys(str(day))
+            year_select = driver.find_element(By.XPATH, "//select[@title='Année :']")
+            year_select.send_keys(str(year))
+            # Cliquer sur Suivant
+            driver.find_element(By.XPATH, "//button[contains(text(),'Suivant')]").click()
             time.sleep(5)
-
-            print(f"Valide le code reçu pour {username} dans le navigateur, puis appuie sur Entrée ici.")
-            input("Appuie sur Entrée quand le compte est validé...")
-
-            # Récupérer les cookies de Selenium
-            selenium_cookies = driver.get_cookies()
-            cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in selenium_cookies])
-
-            # Sauvegarder le cookie dans le fichier session
-            session_file = os.path.join(SESSIONS_DIR, f"{username}.session")
-            with open(session_file, "w") as f:
-                f.write(cookie_str)
-
-            # Ajoute le compte dans les fichiers
-            add_created_account(username, password)
-
-            creators[email_or_phone] += 1
-            save_creators(creators)
-            print(f"Compte ajouté : {username} ({email_or_phone})")
-
-            driver.quit()
-            time.sleep(5)
-
-        # Proposer de continuer ou quitter
-        again = input("Créer d'autres comptes ? (o/n) : ").strip().lower()
-        if again != "o":
-            break
+        except Exception as e:
+            print("Erreur lors de la saisie de la date de naissance :", e)
+        print(f"Compte généré : {username} / {password}")
+        print("Valide le captcha et la confirmation dans le navigateur, puis appuie sur Entrée ici pour enregistrer le compte.")
+        input("Appuie sur Entrée quand le compte est validé et créé...")
+        # Récupérer les cookies
+        selenium_cookies = driver.get_cookies()
+        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in selenium_cookies])
+        save_account(username, password, cookie_str)
+        print(f"Compte enregistré dans {CREATED_ACCOUNTS_FILE} et session sauvegardée.")
+        driver.quit()
+        time.sleep(5)
 
 def menu():
     import_smm_py_accounts()
@@ -678,8 +713,9 @@ def menu():
 [9] Créer des comptes Instagram automatiquement
 [10] Voir la liste des comptes créés
 [11] Voir les numéros/emails utilisés
+[12] Changer le mode de User-Agent (actuel: {} )
 [0] Quitter
-""")
+""".format(get_user_agent_mode()))
         choice = input("Votre choix : ")
         if choice == '1':
             add_account()
@@ -703,6 +739,20 @@ def menu():
             show_created_accounts()
         elif choice == '11':
             show_creators()
+        elif choice == '12':
+            print("\nMode actuel : {}".format(get_user_agent_mode()))
+            print("1. Mode custom (aléatoire, style Instagram)")
+            print("2. Mode réel (user-agent Android réel)")
+            sub = input("Choisir le mode (1 ou 2) : ")
+            if sub == '1':
+                set_user_agent_mode('custom')
+                print("Mode user-agent défini sur custom.")
+            elif sub == '2':
+                set_user_agent_mode('real')
+                print("Mode user-agent défini sur real.")
+            else:
+                print("Choix invalide.")
+            time.sleep(1)
         elif choice == '0':
             print("Au revoir !")
             break
