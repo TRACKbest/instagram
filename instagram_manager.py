@@ -9,6 +9,7 @@ import re
 from bs4 import BeautifulSoup as bs
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+import platform
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -576,6 +577,12 @@ def show_creators():
     input("\nAppuie sur Entrée pour revenir au menu...")
 
 def auto_create_accounts():
+    # Vérification de l'environnement
+    if platform.system().lower() == "linux" and "android" in platform.platform().lower():
+        print("La création automatique de comptes Instagram n'est pas possible sur Termux/Android.")
+        print("Crée les comptes manuellement, puis ajoute-les dans le bot via l'option 'Ajouter un compte'.")
+        input("Appuie sur Entrée pour revenir au menu...")
+        return
     clear()
     print("Création automatique de comptes Instagram (validation manuelle du code email/SMS)")
     creators = load_creators()
