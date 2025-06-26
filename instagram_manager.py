@@ -2,15 +2,11 @@ import os
 import time
 import json
 from uuid import uuid4
-import requests
 import sys
 import random
 import re
-from bs4 import BeautifulSoup as bs
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-import platform
-import importlib.util
+from instagrapi import Client
+from instagrapi.exceptions import LoginRequired, ClientError, ClientLoginRequired
 
 # Dossiers et fichiers
 BASE_DIR = os.path.join(os.path.dirname(__file__), "SmmKingdomTask")
@@ -18,15 +14,10 @@ ACCOUNTS_FILE = os.path.join(BASE_DIR, "insta-accounts.json")
 HASHTAGS_FILE = os.path.join(BASE_DIR, "hashtags.txt")
 ON_HOLD_FILE = os.path.join(BASE_DIR, "on_hold_accounts.txt")
 SMMPY_ACCOUNTS = os.path.join(BASE_DIR, "insta-acct.txt")
-SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
-CREATED_ACCOUNTS_FILE = os.path.join(BASE_DIR, "created_accounts.txt")
-CREATORS_FILE = os.path.join(BASE_DIR, "creators.txt")
-USER_AGENT_MODE_FILE = os.path.join(os.path.dirname(__file__), 'user_agent_mode.txt')
-USER_AGENT_MODES = ['custom', 'real']
 
 # Limites Instagram
 FOLLOW_LIMIT_PER_HOUR = 10
-LIKE_LIMIT_PER_HOUR = 50
+LIKE_LIMIT_PER_HOUR = 10
 COMMENT_LIMIT_PER_HOUR = 10
 MAX_HASHTAGS = 30
 
@@ -38,7 +29,6 @@ S = '\033[0m'     # Reset
 
 # Initialisation des fichiers
 os.makedirs(BASE_DIR, exist_ok=True)
-os.makedirs(SESSIONS_DIR, exist_ok=True)
 if not os.path.exists(ACCOUNTS_FILE):
     with open(ACCOUNTS_FILE, 'w') as f:
         json.dump({}, f)
@@ -52,33 +42,36 @@ if not os.path.exists(ON_HOLD_FILE):
 def clear():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def attempt_login_and_get_cookie(user, pwd):
-    """Connexion à Instagram, retourne le cookie si succès, sinon None."""
-    uid = str(uuid4())
-    url = "https://i.instagram.com/api/v1/accounts/login/"
-    header0 = {
-        'User-Agent': 'Instagram 113.0.0.39.122 Android (24/5.0; 515dpi; 1440x2416; huawei/google; Nexus 6P; angler; angler; en_US)',
-        "Accept": "*/*", "Accept-Encoding": "gzip, deflate", "Accept-Language": "en-US",
-        "X-IG-Capabilities": "3brTvw==", "X-IG-Connection-Type": "WIFI",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        'Host': 'i.instagram.com', 'Connection': 'keep-alive'
-    }
-    data1 = {
-        'uuid': uid, 'password': pwd, 'username': user, 'device_id': uid,
-        'from_reg': 'false', '_csrftoken': 'YcJzPesTYxMTfmpSOiVn3pfRAJdrETFD',
-        'login_attempt_countn': '0'
-    }
+def attempt_login_and_get_session(user, pwd):
+    """Connexion à Instagram avec instagrapi, retourne le client si succès, sinon None."""
     try:
-        rq_session = requests.session()
-        rq1 = rq_session.post(url=url, headers=header0, data=data1)
-        rp1 = rq1.text
-        if "ok" in rp1 and "logged_in_user" in rp1:
-            cookies = str(rq1.cookies.get_dict())[1:-1].replace("'", '').replace(':', '=').replace(',', ';')
-            return cookies
+        client = Client()
+        client.login(user, pwd)
+        return client
     except Exception as e:
         print(f"Erreur lors de la connexion : {e}")
         return None
-    return None
+
+def login_with_cookie(user, cookie):
+    """Connexion à Instagram avec un cookie existant."""
+    try:
+        client = Client()
+        # Convertir le cookie string en dict
+        cookies_dict = {}
+        for item in cookie.split(';'):
+            if '=' in item:
+                key, value = item.split('=', 1)
+                cookies_dict[key.strip()] = value.strip()
+        
+        # Définir les cookies
+        client.set_cookies(cookies_dict)
+        
+        # Vérifier si la session est valide
+        client.get_timeline_feed()
+        return client
+    except Exception as e:
+        print(f"Erreur lors de la connexion avec cookie : {e}")
+        return None
 
 def load_accounts():
     if os.path.exists(ACCOUNTS_FILE):
@@ -124,17 +117,21 @@ def add_account():
             time.sleep(1)
             return
         print("Connexion à Instagram en cours...")
-        cookie = attempt_login_and_get_cookie(user, pwd)
-        if cookie:
+        client = attempt_login_and_get_session(user, pwd)
+        if client:
+            # Récupérer les cookies de session
+            cookies = client.get_settings()
+            cookie_string = '; '.join([f"{k}={v}" for k, v in client.get_cookies().items()])
+            
             accounts[user] = {
-                'cookie': cookie,
+                'cookie': cookie_string,
                 'follow_count': 0,
                 'like_count': 0,
                 'comment_count': 0,
                 'last_action_hour': 0
             }
             save_accounts(accounts)
-            print(f"{B}[{V}✔{B}] Compte ajouté et cookie récupéré.{S}")
+            print(f"{B}[{V}✔{B}] Compte ajouté et session récupérée.{S}")
             time.sleep(2)
         else:
             print(f"{B}[{R}✖{B}] Échec de la connexion. Identifiants invalides ou compte bloqué.{S}")
@@ -149,16 +146,24 @@ def add_account():
             print("Ce compte existe déjà.")
             time.sleep(1)
             return
-        accounts[user] = {
-            'cookie': cookie,
-            'follow_count': 0,
-            'like_count': 0,
-            'comment_count': 0,
-            'last_action_hour': 0
-        }
-        save_accounts(accounts)
-        print(f"{B}[{V}✔{B}] Compte ajouté.{S}")
-        time.sleep(1)
+        
+        # Tester la validité du cookie
+        print("Test de la connexion avec le cookie...")
+        client = login_with_cookie(user, cookie)
+        if client:
+            accounts[user] = {
+                'cookie': cookie,
+                'follow_count': 0,
+                'like_count': 0,
+                'comment_count': 0,
+                'last_action_hour': 0
+            }
+            save_accounts(accounts)
+            print(f"{B}[{V}✔{B}] Compte ajouté avec cookie valide.{S}")
+            time.sleep(1)
+        else:
+            print(f"{B}[{R}✖{B}] Cookie invalide ou expiré.{S}")
+            time.sleep(2)
     elif choice == '0':
         return
     else:
@@ -288,141 +293,62 @@ def reactivate_account():
         print(f"{B}[{R}✖{B}] Entrée invalide.{S}")
         time.sleep(1)
 
-def get_user_agent_mode():
-    if os.path.exists(USER_AGENT_MODE_FILE):
-        with open(USER_AGENT_MODE_FILE, 'r') as f:
-            mode = f.read().strip()
-            if mode in USER_AGENT_MODES:
-                return mode
-    return 'custom'
-
-def set_user_agent_mode(mode):
-    if mode in USER_AGENT_MODES:
-        with open(USER_AGENT_MODE_FILE, 'w') as f:
-            f.write(mode)
-
-def user_agent():
-    mode = get_user_agent_mode()
-    if mode == 'real':
-        # Charger la fonction get_random_user_agent depuis android/user_agents.py
-        spec = importlib.util.spec_from_file_location('user_agents', os.path.join(os.path.dirname(__file__), 'android', 'user_agents.py'))
-        user_agents = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(user_agents)
-        return user_agents.get_random_user_agent()
-    # Mode custom (par défaut)
-    version = f"{random.randint(100, 200)}.0.0.{random.randint(10, 30)}.{random.randint(100, 200)}"
-    android_version = f"{random.randint(7, 12)}"
-    dpi = random.choice(['320', '480', '640'])
-    width = random.choice(['1080', '1440'])
-    height = random.choice(['1920', '2560'])
-    manufacturer = random.choice(['samsung', 'huawei', 'google', 'oneplus', 'xiaomi'])
-    model = random.choice(['SM-G991U', 'Pixel 6', 'Mate 40 Pro', 'OnePlus 9', 'Mi 11'])
-    return f"Instagram {version} Android ({android_version}; {dpi}dpi; {width}x{height}; {manufacturer}; {model}; en_US)"
-
-def _get_entity_id(session, url, cookie, entity_type):
-    """Récupère un ID (user_id ou media_id) depuis une URL Instagram."""
-    headers = {'user-agent': user_agent()}
-    # Utiliser le cookie pour la session, si disponible
-    cookies_dict = {}
-    if cookie:
-        # Simple parsing du cookie
+def get_client_for_user(username, cookie):
+    """Crée un client instagrapi pour un utilisateur avec son cookie."""
+    try:
+        client = Client()
+        # Convertir le cookie string en dict
+        cookies_dict = {}
         for item in cookie.split(';'):
             if '=' in item:
                 key, value = item.split('=', 1)
                 cookies_dict[key.strip()] = value.strip()
+        
+        client.set_cookies(cookies_dict)
+        return client
+    except Exception as e:
+        print(f"Erreur lors de la création du client pour {username}: {e}")
+        return None
+
+def follow_user(client, target_username):
+    """Suivre un utilisateur avec instagrapi."""
     try:
-        response = session.get(url, headers=headers, cookies=cookies_dict, timeout=10)
-        response.raise_for_status()
-        
-        pattern = f'"{entity_type}":"(.*?)"'
-        match = re.search(pattern, response.text)
-        
-        if match:
-            return match.group(1)
-        print(f"{B}[{R}✖{B}] Impossible de trouver l'ID ({entity_type}) pour {url}{S}")
-        return None
-    except requests.RequestException as e:
-        print(f"{B}[{R}✖{B}] Erreur réseau en récupérant l'ID de {url}: {e}{S}")
-        return None
+        user_id = client.user_id_by_username(target_username)
+        client.user_follow(user_id)
+        return True
+    except Exception as e:
+        print(f"Erreur lors du follow: {e}")
+        return False
 
-def _get_user_id(session, username, cookie):
-    url = f"https://www.instagram.com/{username}/"
-    return _get_entity_id(session, url, cookie, "user_id")
+def like_post(client, post_id):
+    """Liker un post avec instagrapi."""
+    try:
+        client.media_like(post_id)
+        return True
+    except Exception as e:
+        print(f"Erreur lors du like: {e}")
+        return False
 
-def _get_latest_post_id(session, username, cookie):
+def comment_on_post(client, post_id, text):
+    """Commenter un post avec instagrapi."""
+    try:
+        client.media_comment(post_id, text)
+        return True
+    except Exception as e:
+        print(f"Erreur lors du commentaire: {e}")
+        return False
+
+def get_latest_post_id(client, username):
     """Récupère l'ID du post le plus récent d'un utilisateur."""
-    profile_url = f"https://www.instagram.com/{username}/"
-    headers = {'user-agent': user_agent()}
-    cookies_dict = {}
-    if cookie:
-        for item in cookie.split(';'):
-            if '=' in item:
-                key, value = item.split('=', 1)
-                cookies_dict[key.strip()] = value.strip()
     try:
-        res = session.get(profile_url, headers=headers, cookies=cookies_dict, timeout=10)
-        res.raise_for_status()
-        
-        # Regex pour trouver le code court du premier lien de post
-        match = re.search(r'"shortcode":"([^"]+)"', res.text)
-        if match:
-            post_url = f"https://www.instagram.com/p/{match.group(1)}/"
-            return _get_entity_id(session, post_url, cookie, "media_id")
+        user_id = client.user_id_by_username(username)
+        user_feed = client.user_medias(user_id, 1)  # Récupère le dernier post
+        if user_feed:
+            return user_feed[0].id
         return None
     except Exception as e:
-        print(f"{B}[{R}✖{B}] Erreur en récupérant le dernier post de {username}: {e}{S}")
+        print(f"Erreur en récupérant le dernier post de {username}: {e}")
         return None
-
-def _perform_action(session, url, cookie, data=None):
-    """Exécute une action (POST) sur l'API Instagram."""
-    # Nettoyer le cookie pour enlever les espaces superflus
-    cookie = ';'.join([c.strip() for c in cookie.split(';') if c.strip()])
-    try:
-        csrftoken = [item.split('=')[1].strip() for item in cookie.split(';') if 'csrftoken' in item][0]
-    except IndexError:
-        print(f"{B}[{R}✖{B}] Jeton CSRF introuvable dans le cookie.{S}")
-        return None
-
-    headers = {
-        "x-ig-app-id": "936619743392459", # ID d'app web
-        "x-instagram-ajax": "1008229312", # Varie mais peut être statique
-        "x-csrftoken": csrftoken,
-        "user-agent": user_agent(),
-        "cookie": cookie
-    }
-    if data:
-        headers["content-type"] = "application/x-www-form-urlencoded"
-
-    try:
-        response = session.post(url, headers=headers, data=data, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"{B}[{R}✖{B}] Erreur de requête vers {url}: {e}{S}")
-        return None
-
-def follow_user(session, target_username, cookie):
-    user_id = _get_user_id(session, target_username, cookie)
-    if not user_id: return False
-    
-    url = f"https://www.instagram.com/api/v1/friendships/create/{user_id}/"
-    response = _perform_action(session, url, cookie)
-    return response and response.get("status") == "ok"
-
-def like_post(session, post_id, cookie):
-    if not post_id: return False
-    
-    url = f"https://www.instagram.com/api/v1/media/{post_id}/like/"
-    response = _perform_action(session, url, cookie)
-    return response and response.get("status") == "ok"
-
-def comment_on_post(session, post_id, cookie, text):
-    if not post_id: return False
-    
-    url = f"https://www.instagram.com/api/v1/web/comments/{post_id}/add/"
-    data = {'comment_text': text}
-    response = _perform_action(session, url, cookie, data=data)
-    return response and response.get("status") == "ok"
 
 def start_bot():
     clear()
@@ -453,13 +379,9 @@ def start_bot():
             active_users = [u for u in all_accounts if u not in on_hold_users]
             
             if len(active_users) < 2:
-                print("Pas assez de comptes actifs. Le bot s'arrête.")
-                break
-
-            # Si tous les comptes sont en attente, on arrête le bot
-            if len(active_users) == 0:
-                print("Tous les comptes ont atteint leurs limites. Le bot s'arrête.")
-                break
+                print("Pas assez de comptes actifs. Le bot se met en pause (60s).")
+                time.sleep(60)
+                continue
 
             random.shuffle(active_users)
 
@@ -473,58 +395,50 @@ def start_bot():
                     account_data.update({'follow_count': 0, 'like_count': 0, 'comment_count': 0, 'last_action_hour': current_hour})
 
                 target_user = random.choice([u for u in active_users if u != username])
-                session = requests.session()
-
-                # Suivi
+                client = get_client_for_user(username, cookie)
+                
+                if not client:
+                    print(f"Impossible de créer le client pour {username}")
+                    continue
+                
                 if account_data['follow_count'] < FOLLOW_LIMIT_PER_HOUR:
                     print(f"[{username}] -> Tente de suivre [{target_user}]...")
-                    if follow_user(session, target_user, cookie):
+                    if follow_user(client, target_user):
                         print(f"{B}[{V}✔{B}] Follow réussi: {username} -> {target_user}{S}")
                         account_data['follow_count'] += 1
                     else:
                         print(f"{B}[{R}✖{B}] Échec du follow: {username} -> {target_user}{S}")
-                    time.sleep(random.randint(20, 40))
-                else:
-                    print(f"[{username}] a atteint la limite de follow/h.")
-
-                # Like
-                post_id = _get_latest_post_id(session, target_user, cookie)
+                    time.sleep(random.randint(5, 10))
+                
+                post_id = get_latest_post_id(client, target_user)
                 if post_id:
                     if account_data['like_count'] < LIKE_LIMIT_PER_HOUR:
                         print(f"[{username}] -> Tente de liker un post de [{target_user}]...")
-                        if like_post(session, post_id, cookie):
-                            print(f"{B}[{V}✔{B}] Like réussi: {username} -> post de {target_user}{S}")
-                            account_data['like_count'] += 1
+                        if like_post(client, post_id):
+                             print(f"{B}[{V}✔{B}] Like réussi: {username} -> post de {target_user}{S}")
+                             account_data['like_count'] += 1
                         else:
                             print(f"{B}[{R}✖{B}] Échec du like: {username} -> post de {target_user}{S}")
-                        time.sleep(random.randint(20, 40))
-                    else:
-                        print(f"[{username}] a atteint la limite de like/h.")
-
-                    # Commentaire
+                        time.sleep(random.randint(5, 10))
+                        
                     if account_data['comment_count'] < COMMENT_LIMIT_PER_HOUR:
                         comment_text = random.choice(hashtags)
                         print(f"[{username}] -> Tente de commenter '{comment_text}'...")
-                        if comment_on_post(session, post_id, cookie, comment_text):
+                        if comment_on_post(client, post_id, comment_text):
                             print(f"{B}[{V}✔{B}] Commentaire réussi: {username} -> post de {target_user}{S}")
                             account_data['comment_count'] += 1
                         else:
-                            print(f"{B}[{R}✖{B}] Échec du commentaire: {username} -> post de {target_user}{S}")
-                        time.sleep(random.randint(20, 40))
-                    else:
-                        print(f"[{username}] a atteint la limite de commentaire/h.")
-
-                # Si le compte a atteint les 3 limites, on le met en attente
-                if (account_data['follow_count'] >= FOLLOW_LIMIT_PER_HOUR and
-                    account_data['like_count'] >= LIKE_LIMIT_PER_HOUR and
-                    account_data['comment_count'] >= COMMENT_LIMIT_PER_HOUR):
+                             print(f"{B}[{R}✖{B}] Échec du commentaire: {username} -> post de {target_user}{S}")
+                        time.sleep(random.randint(10, 15))
+                
+                if all(account_data[k] >= l for k, l in [('follow_count', FOLLOW_LIMIT_PER_HOUR), ('like_count', LIKE_LIMIT_PER_HOUR), ('comment_count', COMMENT_LIMIT_PER_HOUR)]):
                     print(f"[{R}✖{B}] Limites horaires atteintes pour {username}. Mise en attente.{S}")
                     on_hold_users.append(username)
                     save_on_hold_accounts(list(set(on_hold_users)))
 
                 save_accounts(all_accounts)
-                print("--- Pause avant le prochain compte (60-120s) ---")
-                time.sleep(random.randint(60, 120))
+                print("--- Pause avant le prochain compte (30-60s) ---")
+                time.sleep(random.randint(30, 60))
 
     except KeyboardInterrupt:
         print("\nArrêt du bot demandé par l'utilisateur.")
@@ -536,6 +450,7 @@ def update_bot():
     url = "https://raw.githubusercontent.com/TRACKbest/instagram/main/instagram_manager.py"
     try:
         print("Téléchargement de la dernière version...")
+        import requests
         response = requests.get(url)
         response.raise_for_status()  # Lève une exception si le téléchargement échoue
         
@@ -546,153 +461,12 @@ def update_bot():
         time.sleep(2)
         # Redémarre le script
         os.execv(sys.executable, ['python'] + sys.argv)
-    except requests.exceptions.RequestException as e:
-        print(f"{B}[{R}✖{B}] Erreur lors du téléchargement de la mise à jour: {e}{S}")
-        print("Veuillez réessayer plus tard ou mettre à jour manuellement.")
+    except ImportError:
+        print(f"{B}[{R}✖{B}] Module requests non disponible pour la mise à jour.{S}")
         time.sleep(3)
     except Exception as e:
         print(f"{B}[{R}✖{B}] Une erreur est survenue lors de la mise à jour: {e}{S}")
         time.sleep(3)
-
-def add_created_account(username, password):
-    with open(CREATED_ACCOUNTS_FILE, "a") as f:
-        f.write(f"{username}:{password}\n")
-
-def add_creator(email_or_phone):
-    creators = load_creators()
-    if email_or_phone not in creators:
-        creators[email_or_phone] = 0
-        save_creators(creators)
-
-def load_creators():
-    creators = {}
-    if os.path.exists(CREATORS_FILE):
-        with open(CREATORS_FILE, "r") as f:
-            for line in f:
-                if ":" in line:
-                    k, v = line.strip().split(":", 1)
-                    creators[k] = int(v)
-    return creators
-
-def save_creators(creators):
-    with open(CREATORS_FILE, "w") as f:
-        for k, v in creators.items():
-            f.write(f"{k}:{v}\n")
-
-def show_created_accounts():
-    clear()
-    if os.path.exists(CREATED_ACCOUNTS_FILE):
-        with open(CREATED_ACCOUNTS_FILE, "r") as f:
-            lines = f.readlines()
-        print("Comptes créés :")
-        for line in lines:
-            print(line.strip())
-    else:
-        print("Aucun compte créé.")
-    input("\nAppuie sur Entrée pour revenir au menu...")
-
-def show_creators():
-    clear()
-    creators = load_creators()
-    print("Numéros/emails utilisés :")
-    for k, v in creators.items():
-        print(f"{k} : {v}/5 comptes")
-    input("\nAppuie sur Entrée pour revenir au menu...")
-
-def auto_create_accounts():
-    import platform
-    if platform.system().lower() == "linux" and "android" in platform.platform().lower():
-        print("La création automatique de comptes Instagram n'est pas possible sur Termux/Android.")
-        print("Crée les comptes manuellement, puis ajoute-les dans le bot via l'option 'Ajouter un compte'.")
-        input("Appuie sur Entrée pour revenir au menu...")
-        return
-    import random
-    import time
-    clear()
-    print("Création automatique de comptes Instagram (validation manuelle du code email/SMS)")
-    email_or_phone = input("Email ou numéro à utiliser : ").strip()
-    password = input("Mot de passe à utiliser : ").strip()
-    nb = int(input("Combien de comptes veux-tu créer ? "))
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-    CREATED_ACCOUNTS_FILE = os.path.join(BASE_DIR, "created_accounts.txt")
-    def generate_username():
-        first_names = ["john", "james", "robert", "michael", "william", "david", "richard", "joseph", "thomas", "charles"]
-        last_names = ["smith", "johnson", "williams", "brown", "jones", "miller", "davis", "garcia", "rodriguez", "wilson"]
-        sep = random.choice(['.', '_'])
-        username = f"{random.choice(first_names)}{sep}{random.choice(last_names)}{sep}{random.randint(100,9999)}"
-        return username
-    def generate_birthdate():
-        current_year = time.localtime().tm_year
-        age = random.randint(26, 79)
-        year = current_year - age
-        month = random.randint(1, 12)
-        if month == 2:
-            day = random.randint(1, 28)
-        elif month in [4, 6, 9, 11]:
-            day = random.randint(1, 30)
-        else:
-            day = random.randint(1, 31)
-        return (day, month, year)
-    def save_account(username, password, cookie_str):
-        with open(CREATED_ACCOUNTS_FILE, "a") as f:
-            f.write(f"{username}:{password}\n")
-        with open(os.path.join(SESSIONS_DIR, f"{username}.session"), "w") as f:
-            f.write(cookie_str)
-    for i in range(nb):
-        print(f"\n--- Création du compte {i+1} ---")
-        driver = webdriver.Chrome()
-        driver.get("https://www.instagram.com/accounts/emailsignup/")
-        time.sleep(3)
-        username = generate_username()
-        full_name = username.replace('.', ' ').replace('_', ' ').title()
-        day, month, year = generate_birthdate()
-        # Remplir le formulaire
-        driver.find_element(By.NAME, "emailOrPhone").send_keys(email_or_phone)
-        driver.find_element(By.NAME, "fullName").send_keys(full_name)
-        driver.find_element(By.NAME, "username").send_keys(username)
-        driver.find_element(By.NAME, "password").send_keys(password)
-        # Vérifier que tous les champs sont bien remplis
-        while True:
-            fields = [
-                driver.find_element(By.NAME, "emailOrPhone").get_attribute("value"),
-                driver.find_element(By.NAME, "fullName").get_attribute("value"),
-                driver.find_element(By.NAME, "username").get_attribute("value"),
-                driver.find_element(By.NAME, "password").get_attribute("value"),
-            ]
-            if all(fields):
-                break
-            print("Tous les champs ne sont pas remplis, vérifie le formulaire.")
-            time.sleep(2)
-        # Cliquer sur Suivant
-        driver.find_element(By.XPATH, "//button[@type='submit']").click()
-        time.sleep(5)
-        # Remplir la date de naissance
-        try:
-            # Instagram peut changer le selecteur, adapte si besoin
-            month_select = driver.find_element(By.XPATH, "//select[@title='Mois :']")
-            month_select.send_keys(str(month))
-            day_select = driver.find_element(By.XPATH, "//select[@title='Jour :']")
-            day_select.send_keys(str(day))
-            year_select = driver.find_element(By.XPATH, "//select[@title='Année :']")
-            year_select.send_keys(str(year))
-            # Cliquer sur Suivant
-            driver.find_element(By.XPATH, "//button[contains(text(),'Suivant')]").click()
-            time.sleep(5)
-        except Exception as e:
-            print("Erreur lors de la saisie de la date de naissance :", e)
-        print(f"Compte généré : {username} / {password}")
-        print("Valide le captcha et la confirmation dans le navigateur, puis appuie sur Entrée ici pour enregistrer le compte.")
-        input("Appuie sur Entrée quand le compte est validé et créé...")
-        # Récupérer les cookies
-        selenium_cookies = driver.get_cookies()
-        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in selenium_cookies])
-        save_account(username, password, cookie_str)
-        print(f"Compte enregistré dans {CREATED_ACCOUNTS_FILE} et session sauvegardée.")
-        driver.quit()
-        time.sleep(5)
 
 def menu():
     import_smm_py_accounts()
@@ -710,12 +484,8 @@ def menu():
 [6] Réactiver un compte en attente
 [7] Démarrer le bot
 [8] Mettre à jour le bot
-[9] Créer des comptes Instagram automatiquement
-[10] Voir la liste des comptes créés
-[11] Voir les numéros/emails utilisés
-[12] Changer le mode de User-Agent (actuel: {} )
 [0] Quitter
-""".format(get_user_agent_mode()))
+""")
         choice = input("Votre choix : ")
         if choice == '1':
             add_account()
@@ -733,26 +503,6 @@ def menu():
             start_bot()
         elif choice == '8':
             update_bot()
-        elif choice == '9':
-            auto_create_accounts()
-        elif choice == '10':
-            show_created_accounts()
-        elif choice == '11':
-            show_creators()
-        elif choice == '12':
-            print("\nMode actuel : {}".format(get_user_agent_mode()))
-            print("1. Mode custom (aléatoire, style Instagram)")
-            print("2. Mode réel (user-agent Android réel)")
-            sub = input("Choisir le mode (1 ou 2) : ")
-            if sub == '1':
-                set_user_agent_mode('custom')
-                print("Mode user-agent défini sur custom.")
-            elif sub == '2':
-                set_user_agent_mode('real')
-                print("Mode user-agent défini sur real.")
-            else:
-                print("Choix invalide.")
-            time.sleep(1)
         elif choice == '0':
             print("Au revoir !")
             break
